@@ -5,11 +5,6 @@
 void BspInit(void)
 {
     WDTCTL = WDTPW | WDTHOLD;
-    if (CALBC1_1MHZ == 0xFFu || CALDCO_1MHZ == 0xFFu) {
-        for (;;) {
-            __bis_SR_register(LPM4_bits);
-        }
-    }
     DCOCTL = 0;
     BCSCTL1 = CALBC1_1MHZ;
     DCOCTL = CALDCO_1MHZ;

@@ -3,51 +3,33 @@
 
 volatile State state = HANDSHAKE;
 volatile Mode mode = TEMPERATURE;
-/* Remember a stop even if another FF arrives while the old frame drains. */
-static volatile bool stopped;
 
-bool StateActive(State expected)
+static void Handshake(void)
 {
-    return state == expected && (expected != WORKING || !stopped);
+    if (state == HANDSHAKE) state = IDLE;
 }
 
-bool WorkBegin(Mode *selected)
+static void Start(void)
 {
-    bool started;
-
-    __disable_interrupt();
-    started = state == WORKING;
-    if (started) {
-        stopped = false;
-        *selected = mode;
-    }
-    __enable_interrupt();
-    return started;
+    if (state == IDLE) state = WORKING;
 }
 
-void WorkEnd(void)
+static void Stop(void)
 {
-    __disable_interrupt();
-    if (StateActive(WORKING)) {
-        state = IDLE;
-    }
-    __enable_interrupt();
+    if (state == WORKING) state = IDLE;
 }
 
 void CommandAnalyze(uint8_t command)
 {
     switch (command) {
     case 0xF0:
-        if (state == HANDSHAKE) state = IDLE;
+        Handshake();
         break;
     case 0xFF:
-        if (state == IDLE) state = WORKING;
+        Start();
         break;
     case 0x00:
-        if (state == WORKING) {
-            stopped = true;
-            state = IDLE;
-        }
+        Stop();
         break;
     case 0xAA:
         if (state == IDLE) mode = TEMPERATURE;
@@ -65,15 +47,7 @@ void CommandAnalyze(uint8_t command)
 __interrupt void UartRxIsr(void)
 {
     if (IFG2 & UCA0RXIFG) {
-        uint8_t status = UCA0STAT;
-        uint8_t command = UCA0RXBUF;
-        State previous = state;
-
-        if (!(status & (UCOE | UCFE | UCPE | UCBRK))) {
-            CommandAnalyze(command);
-        }
-        if (state != previous) {
-            __bic_SR_register_on_exit(LPM0_bits);
-        }
+        CommandAnalyze(UCA0RXBUF);
+        __bic_SR_register_on_exit(LPM0_bits);
     }
 }

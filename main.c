@@ -2,20 +2,16 @@
 #include "bsp_init.h"
 #include "command_process.h"
 #include "timer_A.h"
-#include "Sampler.h"
 #include "Working.h"
 
 int main(void)
 {
-    static const uint8_t hello = '=';
-
     BspInit();
     for (;;) {
         switch (state) {
         case HANDSHAKE:
-            if (Delay(100u, HANDSHAKE)) {
-                Send(&hello, 1u, HANDSHAKE);
-            }
+            Delay(100);
+            if (state == HANDSHAKE) UCA0TXBUF = '=';
             break;
         case IDLE:
             __disable_interrupt();
@@ -25,7 +21,7 @@ int main(void)
             __enable_interrupt();
             break;
         case WORKING:
-            Working();
+            working();
             break;
         }
     }

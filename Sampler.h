@@ -3,14 +3,15 @@
 
 #include "command_process.h"
 
-#define FRAME_SIZE(count) (4u + 2u * (count))
+#define WAVE_POINTS 8u
+#define TRIGGER_POINTS 128u
 
-void SamplerInit(Mode selected);
-bool Sample(uint16_t *raw);
-void PackHeader(uint8_t *frame, Mode selected, uint8_t count);
-void Pack(uint8_t *frame, uint8_t index, uint16_t raw);
-uint16_t ReadPacked(const uint8_t *frame, uint8_t index);
-bool Send(const uint8_t *frame, uint16_t size, State expected);
-void SendWait(void);
+extern volatile uint16_t adcBUF;
+extern volatile uint16_t PackBit;
+
+void SamplerInit(void);
+void Sample(void);
+void Pack(void);
+void send(void);
 
 #endif

@@ -1,17 +1,17 @@
 #include <msp430.h>
 #include "Sampler.h"
 
-static volatile uint16_t adcBUF;
-static volatile bool adc_ready;
-static const uint8_t *volatile tx_next;
-static volatile uint16_t tx_remaining;
+volatile uint16_t adcBUF;
+volatile uint16_t PackBit;
+static volatile uint8_t txBUF[4u + 2u * TRIGGER_POINTS];
+static volatile uint16_t tx_pos;
 
-void SamplerInit(Mode selected)
+void SamplerInit(void)
 {
     ADC10CTL0 &= ~ENC;
     ADC10DTC1 = 0;
     ADC10CTL0 = ADC10SHT_3 | ADC10ON;
-    if (selected == TEMPERATURE) {
+    if (mode == TEMPERATURE) {
         ADC10AE0 &= ~BIT7;
         ADC10CTL1 = INCH_10 | ADC10SSEL_3;
         ADC10CTL0 |= SREF_1 | REFON;  /* Internal 1.5 V reference */
@@ -24,71 +24,56 @@ void SamplerInit(Mode selected)
     }
 }
 
-bool Sample(uint16_t *raw)
+void Sample(void)
 {
-    bool active;
-
     __disable_interrupt();
-    if (StateActive(WORKING)) {
-        adc_ready = false;
+    if (state == WORKING) {
         ADC10CTL0 |= ADC10IE | ENC | ADC10SC;
-        while (!adc_ready) {
+        while (ADC10CTL0 & ADC10IE) {
             __bis_SR_register(LPM0_bits | GIE);
             __disable_interrupt();
         }
-        *raw = adcBUF;
-    }
-    active = StateActive(WORKING);
-    __enable_interrupt();
-    return active;
-}
-
-void PackHeader(uint8_t *frame, Mode selected, uint8_t count)
-{
-    frame[0] = 0xA5;
-    frame[1] = 0x5A;
-    frame[2] = selected == TEMPERATURE ? 0x00 : 0xFF;
-    frame[3] = count;
-}
-
-void Pack(uint8_t *frame, uint8_t index, uint16_t raw)
-{
-    uint16_t offset = FRAME_SIZE(index);
-
-    frame[offset] = (uint8_t)(raw >> 8);
-    frame[offset + 1u] = (uint8_t)raw;
-}
-
-uint16_t ReadPacked(const uint8_t *frame, uint8_t index)
-{
-    uint16_t offset = FRAME_SIZE(index);
-
-    return ((uint16_t)frame[offset] << 8) | frame[offset + 1u];
-}
-
-bool Send(const uint8_t *frame, uint16_t size, State expected)
-{
-    bool active;
-
-    __disable_interrupt();
-    while (tx_remaining != 0u && StateActive(expected)) {
-        __bis_SR_register(LPM0_bits | GIE);
-        __disable_interrupt();
-    }
-    active = StateActive(expected);
-    if (active) {
-        tx_next = frame;
-        tx_remaining = size;
-        IE2 |= UCA0TXIE;
     }
     __enable_interrupt();
-    return active;
 }
 
-void SendWait(void)
+void Pack(void)
+{
+    switch (PackBit) {
+    case 0:
+        txBUF[PackBit++] = 0xA5;
+        break;
+    case 1:
+        txBUF[PackBit++] = 0x5A;
+        break;
+    case 2:
+        txBUF[PackBit++] = mode == TEMPERATURE ? 0x00 : 0xFF;
+        break;
+    case 3:
+        switch (mode) {
+        case TEMPERATURE: txBUF[PackBit++] = 1u; break;
+        case WAVE: txBUF[PackBit++] = WAVE_POINTS; break;
+        case TRIGGER: txBUF[PackBit++] = TRIGGER_POINTS; break;
+        }
+        break;
+    default:
+        txBUF[PackBit++] = (uint8_t)(adcBUF >> 8);
+        txBUF[PackBit++] = (uint8_t)adcBUF;
+        return;
+    }
+    Pack();
+}
+
+void send(void)
 {
     __disable_interrupt();
-    while (tx_remaining != 0u) {
+    if (state != WORKING) {
+        __enable_interrupt();
+        return;
+    }
+    tx_pos = 0;
+    IE2 |= UCA0TXIE;
+    while (IE2 & UCA0TXIE) {
         __bis_SR_register(LPM0_bits | GIE);
         __disable_interrupt();
     }
@@ -102,7 +87,7 @@ void SendWait(void)
 __interrupt void AdcIsr(void)
 {
     adcBUF = ADC10MEM;
-    adc_ready = true;
+    ADC10CTL0 &= ~ADC10IE;
     __bic_SR_register_on_exit(LPM0_bits);
 }
 
@@ -110,8 +95,8 @@ __interrupt void AdcIsr(void)
 __interrupt void UartTxIsr(void)
 {
     if (IFG2 & UCA0TXIFG) {
-        UCA0TXBUF = *tx_next++;
-        if (--tx_remaining == 0u) {
+        UCA0TXBUF = txBUF[tx_pos++];
+        if (tx_pos == PackBit) {
             IE2 &= ~UCA0TXIE;
             __bic_SR_register_on_exit(LPM0_bits);
         }
