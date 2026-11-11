@@ -1,7 +1,8 @@
 #include <msp430.h>
+#include "command_process.h"
 #include "timer_A.h"
 
-static volatile uint16_t ticks_left;
+static volatile int ticks_left;
 
 void TimerInit(void)
 {
@@ -10,27 +11,25 @@ void TimerInit(void)
     TA0CTL = TASSEL_2 | MC_1 | TACLR;  /* 5000 SMCLK cycles per tick */
 }
 
-bool Delay(uint16_t n, State expected)
+void Delay(int n)
 {
-    bool active;
+    State previous;
 
     __disable_interrupt();
+    previous = state;
     ticks_left = n;
     TA0CCTL0 = CCIE;                  /* Clear a flag from outside Delay. */
-    while (ticks_left != 0u && StateActive(expected)) {
+    while (ticks_left > 0 && state == previous) {
         __bis_SR_register(LPM0_bits | GIE);
         __disable_interrupt();
     }
     TA0CCTL0 = 0;
-    active = StateActive(expected);
     __enable_interrupt();
-    return active;
 }
 
 #pragma vector=TIMER0_A0_VECTOR
 __interrupt void TimerAIsr(void)
 {
-    if (ticks_left != 0u && --ticks_left == 0u) {
-        __bic_SR_register_on_exit(LPM0_bits);
-    }
+    --ticks_left;
+    __bic_SR_register_on_exit(LPM0_bits);
 }

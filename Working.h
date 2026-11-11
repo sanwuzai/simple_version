@@ -1,6 +1,6 @@
 #ifndef SIMPLE_WORKING_H
 #define SIMPLE_WORKING_H
 
-void Working(void);
+void working(void);
 
 #endif

@@ -1,115 +1,86 @@
 #include "Working.h"
 #include "Sampler.h"
 #include "timer_A.h"
+#include <stdbool.h>
 
-#define TEMP_TICKS 100u
-#define WAVE_POINTS 8u
+#define TEMP_TICKS 100
 #define HISTORY_POINTS 64u
-#define TRIGGER_POINTS (2u * HISTORY_POINTS)
 #define AVCC_MV 3300UL
 #define TRIGGER_LIMIT (200UL * HISTORY_POINTS * 1023UL / AVCC_MV)
 
-static uint8_t frame[FRAME_SIZE(TRIGGER_POINTS)];
-/* One wave frame goes out in ~21 ms; the next takes 40 ms to fill. */
-static uint8_t wave_frame[FRAME_SIZE(WAVE_POINTS)];
+static uint16_t history[HISTORY_POINTS];
 
 static void Temp(void)
 {
-    uint16_t raw;
-
-    PackHeader(frame, TEMPERATURE, 1u);
-    while (Delay(TEMP_TICKS, WORKING) && Sample(&raw)) {
-        Pack(frame, 0u, raw);
-        if (!Send(frame, FRAME_SIZE(1u), WORKING)) return;
-    }
+    Delay(TEMP_TICKS);
+    if (state != WORKING) return;
+    Sample();
+    if (state != WORKING) return;
+    Pack();
+    send();
 }
 
-static bool VoltageSample(uint16_t *raw)
+static bool VoltageSample(void)
 {
-    return Delay(1u, WORKING) && Sample(raw);
+    Delay(1);
+    if (state != WORKING) return false;
+    Sample();
+    return state == WORKING;
 }
 
 static void Wave(void)
 {
-    uint8_t *filling = frame;
     uint8_t i;
-    uint16_t raw;
 
-    for (;;) {
-        PackHeader(filling, WAVE, WAVE_POINTS);
-        for (i = 0; i < WAVE_POINTS; ++i) {
-            if (!VoltageSample(&raw)) return;
-            Pack(filling, i, raw);
-        }
-        if (!Send(filling, FRAME_SIZE(WAVE_POINTS), WORKING)) return;
-        filling = filling == frame ? wave_frame : frame;
+    for (i = 0; i < WAVE_POINTS; ++i) {
+        if (!VoltageSample()) return;
+        Pack();
     }
-}
-
-static bool Triggered(uint16_t raw, uint16_t sum)
-{
-    uint16_t scaled = raw * HISTORY_POINTS;
-    uint16_t delta = scaled > sum ? scaled - sum : sum - scaled;
-
-    /* Compare with the mean including the latest point, without rounding it. */
-    return delta > TRIGGER_LIMIT;
-}
-
-static void ReverseHistory(uint8_t first, uint8_t end)
-{
-    while (first < end) {
-        uint16_t raw = ReadPacked(frame, first);
-
-        --end;
-        Pack(frame, first, ReadPacked(frame, end));
-        Pack(frame, end, raw);
-        ++first;
-    }
+    send();
 }
 
 static void Trigger(void)
 {
     uint8_t i, oldest = 0;
-    uint16_t raw, sum = 0;            /* 64 * 1023 fits in uint16_t. */
+    uint16_t sum = 0;                /* 64 * 1023 fits in uint16_t. */
 
-    PackHeader(frame, TRIGGER, TRIGGER_POINTS);
     for (i = 0; i < HISTORY_POINTS; ++i) {
-        if (!VoltageSample(&raw)) return;
-        Pack(frame, i, raw);
-        sum += raw;
+        if (!VoltageSample()) return;
+        history[i] = adcBUF;
+        sum += history[i];
     }
-    while (!Triggered(raw, sum)) {
-        if (!VoltageSample(&raw)) return;
-        sum -= ReadPacked(frame, oldest);
-        sum += raw;
-        Pack(frame, oldest, raw);
+    for (;;) {
+        uint16_t scaled = adcBUF * HISTORY_POINTS;
+        uint16_t delta = scaled > sum ? scaled - sum : sum - scaled;
+
+        if (delta > TRIGGER_LIMIT) break;
+        if (!VoltageSample()) return;
+        sum -= history[oldest];
+        history[oldest] = adcBUF;
+        sum += history[oldest];
         oldest = (oldest + 1u) % HISTORY_POINTS;
     }
+    /* Pack the history in order, with the trigger at sample 64. */
+    for (i = 0; i < HISTORY_POINTS; ++i) {
+        if (state != WORKING) return;
+        adcBUF = history[(oldest + i) % HISTORY_POINTS];
+        Pack();
+    }
     for (i = HISTORY_POINTS; i < TRIGGER_POINTS; ++i) {
-        if (!VoltageSample(&raw)) return;
-        Pack(frame, i, raw);
+        if (!VoltageSample()) return;
+        Pack();
     }
-    /* Rotate just the history so the trigger point is at index 63. */
-    if (oldest != 0u) {
-        ReverseHistory(0u, oldest);
-        ReverseHistory(oldest, HISTORY_POINTS);
-        ReverseHistory(0u, HISTORY_POINTS);
-    }
-    Send(frame, FRAME_SIZE(TRIGGER_POINTS), WORKING);
+    send();
+    state = IDLE;
 }
 
-void Working(void)
+void working(void)
 {
-    Mode selected;
-
-    if (!WorkBegin(&selected)) return;
-    SamplerInit(selected);
-    TimerInit();
-    switch (selected) {
+    PackBit = 0;
+    SamplerInit();
+    switch (mode) {
     case TEMPERATURE: Temp(); break;
     case WAVE: Wave(); break;
     case TRIGGER: Trigger(); break;
     }
-    SendWait();
-    WorkEnd();
 }
