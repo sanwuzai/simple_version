@@ -4,23 +4,16 @@
 
 static volatile int ticks_left;
 
-void TimerInit(void)
-{
-    TA0CCR0 = 4999u;
-    TA0CCTL0 = 0;
-    TA0CTL = TASSEL_2 | MC_1 | TACLR;  /* 5000 SMCLK cycles per tick */
-}
-
-void Delay(int n)
+void Delay(int n)//延时n个5ms
 {
     State previous;
 
     __disable_interrupt();
-    previous = state;
+    previous = state;//保存先前状态
     ticks_left = n;
-    TA0CCTL0 = CCIE;                  /* Clear a flag from outside Delay. */
-    while (ticks_left > 0 && state == previous) {
-        __bis_SR_register(LPM0_bits | GIE);
+    TA0CCTL0 = CCIE;                  
+    while (ticks_left > 0/*等待足够拍数后退出*/ && state == previous/*状态不一样也会退出*/) {
+        __bis_SR_register(LPM0_bits | GIE);//休眠等待Timer中断
         __disable_interrupt();
     }
     TA0CCTL0 = 0;

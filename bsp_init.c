@@ -20,6 +20,9 @@ void BspInit(void)
     UCA0CTL1 &= ~UCSWRST;
     IE2 = (IE2 & ~UCA0TXIE) | UCA0RXIE;
 
-    TimerInit();
+    TA0CCR0 = 4999u;
+    TA0CCTL0 = 0;
+    TA0CTL = TASSEL_2 | MC_1 | TACLR;  /* 5000 SMCLK cycles per tick */
+
     __enable_interrupt();
 }
